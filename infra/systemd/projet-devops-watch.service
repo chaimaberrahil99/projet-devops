@@ -1,0 +1,41 @@
+# Service systemd : fait tourner la surveillance du registry en permanence,
+# y compris apres un redemarrage de la machine.
+#
+# Installation (adapter UTILISATEUR et CHEMIN) :
+#
+#   sudo cp infra/systemd/projet-devops-watch.service /etc/systemd/system/
+#   sudo nano /etc/systemd/system/projet-devops-watch.service   # User= et WorkingDirectory=
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now projet-devops-watch
+#
+# Suivre ce qu'il fait, en direct :
+#   journalctl -u projet-devops-watch -f
+#
+# L'arreter :
+#   sudo systemctl stop projet-devops-watch
+
+[Unit]
+Description=Deploiement continu tire - projet DevOps
+Documentation=https://github.com/chaimaberrahil99/projet-devops
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+
+# A ADAPTER : l'utilisateur et le chemin du depot clone sur la machine.
+User=azureuser
+WorkingDirectory=/home/azureuser/projet-devops
+
+Environment=INTERVALLE=120
+ExecStart=/home/azureuser/projet-devops/infra/compose/watch-deploy.sh
+
+# Si le script s'arrete pour une raison quelconque, on le relance.
+Restart=always
+RestartSec=10
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -201,3 +201,80 @@ infra/
 docs/         dossier de projet
 .env          configuration, volontairement versionnée (aucun secret)
 ```
+
+
+---
+
+# 8. Déploiement continu « tiré » (pull-based)
+
+Le pipeline s'exécute sur les serveurs de GitHub. Pour qu'il déploie lui-même
+sur une machine, il faudrait qu'il puisse s'y connecter — impossible si celle-ci
+n'a pas d'adresse publique : PC derrière une box, réseau d'école, VM locale.
+
+On inverse donc le sens. Ce n'est plus GitHub qui pousse vers la machine, c'est
+la machine qui va chercher : elle interroge le registry toutes les deux minutes
+et redéploie dès qu'une nouvelle image est publiée. Aucun port à ouvrir, aucune
+adresse publique nécessaire.
+
+C'est le principe du **GitOps** — celui de FluxCD et ArgoCD cités dans le sujet —
+réduit à sa plus simple expression.
+
+## Lancer la surveillance
+
+Sur la machine de production, depuis la racine du dépôt :
+
+```bash
+./infra/compose/watch-deploy.sh
+```
+
+Le script démarre la stack, puis boucle. À chaque cycle il compare l'identifiant
+local des images avant et après un `pull` : s'il a changé, une nouvelle version
+a été publiée, et il redéploie avec `up -d --wait` suivi des migrations.
+
+Pour tester plus vite : `INTERVALLE=30 ./infra/compose/watch-deploy.sh`
+
+## En faire un service permanent
+
+Pour qu'il survive à la fermeture du terminal et au redémarrage de la machine :
+
+```bash
+sudo cp infra/systemd/projet-devops-watch.service /etc/systemd/system/
+sudo nano /etc/systemd/system/projet-devops-watch.service   # adapter User= et WorkingDirectory=
+sudo systemctl daemon-reload
+sudo systemctl enable --now projet-devops-watch
+```
+
+Suivre ce qu'il fait, en direct :
+```bash
+journalctl -u projet-devops-watch -f
+```
+
+Sous WSL, `systemd` n'est pas toujours actif. Dans ce cas, lancer le script en
+arrière-plan suffit :
+```bash
+nohup ./infra/compose/watch-deploy.sh > /tmp/watch-deploy.log 2>&1 &
+tail -f /tmp/watch-deploy.log
+```
+
+## Démonstration de la chaîne complète
+
+Avec ce service en marche, le scénario décrit dans les consignes se déroule sans
+aucune intervention humaine :
+
+1. Un développeur modifie le code et pousse un commit.
+2. Le pipeline joue l'analyse statique et les tests.
+3. Les images sont construites et publiées sur le registry.
+4. La machine de production détecte la nouvelle version et redéploie seule.
+
+Comptez trois à quatre minutes entre le `git push` et la nouvelle version en
+ligne. Gardez `journalctl -u projet-devops-watch -f` affiché pendant la
+démonstration : on y voit le redéploiement se déclencher tout seul.
+
+## Pourquoi pas un runner auto-hébergé
+
+L'autre solution consisterait à installer un agent GitHub Actions sur la machine,
+qui interroge GitHub en sortie. Elle est écartée ici volontairement : sur un
+dépôt **public**, n'importe qui peut ouvrir une pull request dont le code
+s'exécuterait sur la machine hôte. GitHub le déconseille explicitement. Le
+déploiement tiré n'a pas ce défaut, puisque la machine ne fait que télécharger
+des images.
