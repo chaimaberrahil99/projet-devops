@@ -1,0 +1,19 @@
+# Toute la configuration, mot de passe inclus.
+#
+# Consigne du prof : pas de Secret dans ce projet. Le mot de passe est donc ici,
+# en clair, et c'est assume -- le depot est public et les valeurs sont factices.
+# En contexte reel, DB_PASSWORD vivrait dans un Secret Kubernetes.
+#
+# Le principe essentiel est respecte malgre tout : la configuration est
+# SEPAREE du code source, ce qui rend les images portables.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: tasks
+data:
+  DB_HOST: postgres        # nom du Service Kubernetes, resolu par le DNS interne
+  DB_PORT: "5432"
+  DB_NAME: tasksdb
+  DB_USER: tasks
+  DB_PASSWORD: tasks-demo-password

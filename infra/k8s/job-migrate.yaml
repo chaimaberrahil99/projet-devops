@@ -1,0 +1,45 @@
+# Migrations jouees AVANT la mise a jour applicative, dans un Job dedie.
+#
+# Pourquoi pas au demarrage du backend : pendant un rolling update, plusieurs
+# pods demarrent en parallele et migreraient en meme temps.
+#
+# Le ConfigMap `db-init` est cree par le pipeline depuis app/db/init.sql :
+#   kubectl create configmap db-init -n tasks \
+#     --from-file=init.sql=app/db/init.sql \
+#     --dry-run=client -o yaml | kubectl apply -f -
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-migrate
+  namespace: tasks
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: postgres:16-alpine
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -e
+              until pg_isready -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME"; do
+                echo "attente de la base..."; sleep 2
+              done
+              psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 \
+                   -f /sql/init.sql
+              echo "migrations appliquees"
+          envFrom:
+            - configMapRef: { name: app-config }
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                configMapKeyRef: { name: app-config, key: DB_PASSWORD }
+          volumeMounts:
+            - name: sql
+              mountPath: /sql
+      volumes:
+        - name: sql
+          configMap:
+            name: db-init

@@ -1,0 +1,12 @@
+# Note : .env est VOLONTAIREMENT versionne dans ce projet.
+# Consigne du prof : aucun secret, depot public, projet clonable tel quel.
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+.ruff_cache/
+*.retry
+node_modules/
+.DS_Store

@@ -1,0 +1,65 @@
+# Environnement de STAGING (etape 3 du sujet).
+# Lancement :  docker compose --env-file ../../.env up --build
+#
+# Le meme code et les memes images serviront en production Kubernetes
+# (etape 6) : seuls les manifests changent, pas les conteneurs.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      # Les donnees survivent a un `docker compose down`. C'est TOUTE la
+      # difference entre un composant stateful et les autres.
+      - db_data:/var/lib/postgresql/data
+      # Tout script .sql place ici est joue au PREMIER demarrage seulement.
+      - ../../app/db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ../../app/backend
+      args:
+        APP_VERSION: ${APP_VERSION:-dev}
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      APP_VERSION: ${APP_VERSION:-dev}
+    depends_on:
+      db:
+        # Le backend ne demarre qu'une fois la base VRAIMENT prete.
+        # `depends_on` seul ne garantit que l'ordre de lancement, pas l'etat.
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL",
+             "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health/ready').status==200 else 1)\""]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../../app/frontend
+    environment:
+      BACKEND_URL: http://backend:8000
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  db_data:

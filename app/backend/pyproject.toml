@@ -1,0 +1,14 @@
+# Configuration du lint, VERSIONNEE : le pipeline CI et les postes des
+# developpeurs appliquent exactement les memes regles. Sans ce fichier, une
+# mise a jour de ruff peut faire echouer votre pipeline sans que le code change.
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "SIM", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

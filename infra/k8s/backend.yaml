@@ -1,0 +1,72 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: tasks
+spec:
+  selector:
+    app: backend
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: tasks
+spec:
+  # 2 replicas MINIMUM : avec un seul pod, le zero-downtime est impossible.
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend
+
+  # ---- C'EST ICI QUE SE JOUE LE ZERO-DOWNTIME -----------------------------
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0   # jamais moins de 2 pods disponibles pendant la MAJ
+      maxSurge: 1         # un pod neuf a la fois, en plus des anciens
+  # Lecture du scenario : Kubernetes demarre un pod neuf, attend que sa
+  # readinessProbe passe au vert, puis seulement retire un ancien pod. A aucun
+  # instant le service ne descend sous 2 pods prets.
+  # -------------------------------------------------------------------------
+
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          # Placeholder : le pipeline remplace ce tag a chaque deploiement via
+          # `kubectl set image`. Remplacez OWNER/REPO par votre depot.
+          image: ghcr.io/OWNER/REPO/backend:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef: { name: app-config }
+
+          # Le processus repond-il ? NE teste pas la base : sinon une base
+          # momentanement indisponible ferait redemarrer TOUS les pods en boucle.
+          livenessProbe:
+            httpGet: { path: /health/live, port: 8000 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+
+          # Ce pod peut-il servir du trafic ? Teste la base.
+          # C'est cette sonde qui garantit qu'un pod neuf ne recoit du trafic
+          # qu'une fois reellement operationnel.
+          readinessProbe:
+            httpGet: { path: /health/ready, port: 8000 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 2
+
+          # Les `requests` ne sont pas decoratives : sans elles, l'HPA n'a
+          # aucune base de calcul et l'auto-scaling ne fonctionne pas.
+          resources:
+            requests: { cpu: 50m,  memory: 64Mi }
+            limits:   { cpu: 500m, memory: 256Mi }

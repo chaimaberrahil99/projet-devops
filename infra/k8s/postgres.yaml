@@ -1,0 +1,74 @@
+# La base est le SEUL composant stateful : un StatefulSet, pas un Deployment.
+# Avec un Deployment, un redeploiement detruirait les donnees.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: tasks
+spec:
+  clusterIP: None            # headless : identite reseau stable du pod
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: tasks
+spec:
+  serviceName: postgres
+  replicas: 1                # une seule instance : pas de HA demandee par le sujet
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef: { name: app-config, key: DB_NAME }
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef: { name: app-config, key: DB_USER }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                configMapKeyRef: { name: app-config, key: DB_PASSWORD }
+            # Sous-dossier obligatoire : le point de montage d'un volume
+            # contient un lost+found qui ferait echouer l'initialisation.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits:   { cpu: 500m, memory: 512Mi }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi

@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tasks</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Tasks</h1>
+      <!-- Affiche la version du backend : c'est ce qui rend la bascule
+           visible a l'ecran pendant la demo de rolling update. -->
+      <span id="version" class="badge">...</span>
+    </header>
+
+    <!-- Agregations calculees par la base et exposees par /api/stats -->
+    <section id="stats" class="stats"></section>
+
+    <form id="form">
+      <input id="title" placeholder="Nouvelle tache" maxlength="200" required>
+      <button type="submit">Ajouter</button>
+    </form>
+
+    <ul id="list"></ul>
+    <p id="error" class="error" hidden></p>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

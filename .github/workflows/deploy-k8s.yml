@@ -1,0 +1,80 @@
+# Deploiement Kubernetes -- A UTILISER PLUS TARD.
+#
+# Ce workflow est declenche A LA MAIN (onglet Actions > Deploiement Kubernetes >
+# Run workflow). Il est separe du pipeline principal pour une raison simple :
+# il exige un acces au cluster, et tant que cet acces n'existe pas, il
+# echouerait a chaque push et ferait apparaitre le projet comme casse.
+#
+# PREREQUIS avant de s'en servir :
+#   1. Un cluster Kubernetes joignable (fourni par une equipe SysOps).
+#   2. Le secret de depot KUBE_CONFIG : le kubeconfig encode en base64,
+#      obtenu avec  base64 -w0 ~/.kube/config
+#   3. metrics-server installe sur le cluster, sinon l'HPA reste sur <unknown>.
+#
+# Tant que la production tourne en Docker Compose, ce fichier ne sert a rien :
+# il attend son heure.
+
+name: Deploiement Kubernetes
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Tag des images a deployer (ex: sha-a1b2c3d, ou latest)"
+        required: true
+        default: latest
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  deploy:
+    name: Deployer sur le cluster
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurer kubectl
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+          kubectl version --client
+
+      - name: Appliquer les manifests
+        run: kubectl apply -k infra/k8s/
+
+      - name: Jouer les migrations
+        # Un Job dedie, AVANT la mise a jour applicative : sinon plusieurs pods
+        # demarrant en parallele migreraient en meme temps.
+        # Le ConfigMap est genere depuis app/db/init.sql -- une seule source de
+        # verite pour le schema, partagee avec la production Docker Compose.
+        run: |
+          kubectl create configmap db-init -n tasks \
+            --from-file=init.sql=app/db/init.sql \
+            --dry-run=client -o yaml | kubectl apply -f -
+          kubectl delete job db-migrate -n tasks --ignore-not-found
+          kubectl apply -f infra/k8s/job-migrate.yaml
+          kubectl wait --for=condition=complete job/db-migrate -n tasks --timeout=120s
+
+      - name: Mettre a jour les images
+        run: |
+          REPO=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')
+          TAG='${{ inputs.image_tag }}'
+          kubectl set image deployment/backend \
+            backend="${REGISTRY}/${REPO}/backend:${TAG}" -n tasks
+          kubectl set image deployment/frontend \
+            frontend="${REGISTRY}/${REPO}/frontend:${TAG}" -n tasks
+
+      - name: Verifier le rollout (zero-downtime)
+        # `kubectl rollout status` ne rend la main que lorsque TOUS les pods
+        # sont prets.
+        run: |
+          kubectl rollout status deployment/backend  -n tasks --timeout=180s
+          kubectl rollout status deployment/frontend -n tasks --timeout=180s
+
+      - name: Annuler en cas d'echec
+        if: failure()
+        run: |
+          kubectl rollout undo deployment/backend  -n tasks || true
+          kubectl rollout undo deployment/frontend -n tasks || true

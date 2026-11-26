@@ -1,0 +1,14 @@
+# `kubectl apply -k infra/k8s/` applique tout dans le bon ordre.
+#
+# job-migrate.yaml et secret.example.yaml sont volontairement EXCLUS :
+#   - le Job est joue separement par le pipeline, avant la mise a jour
+#   - le Secret est cree a la main, jamais committe avec sa vraie valeur
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - postgres.yaml
+  - backend.yaml
+  - frontend.yaml
+  - hpa.yaml

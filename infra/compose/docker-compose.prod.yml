@@ -1,0 +1,99 @@
+# PRODUCTION sur VM, sans Kubernetes.
+#
+# Difference essentielle avec docker-compose.yml (staging) : ici on ne
+# CONSTRUIT rien. On TIRE les images deja construites et publiees par le
+# pipeline CI/CD. C'est ce qui fait de ceci un vrai deploiement continu :
+# la VM ne connait pas le code source, seulement des images versionnees.
+#
+# C'est aussi ce qui permet de faire tourner le projet d'une AUTRE equipe sur
+# cette meme infrastructure : il suffit de changer IMAGE_PREFIX.
+#
+# Lancement sur la VM :
+#   cd infra/compose
+#   docker compose -f docker-compose.prod.yml --env-file ../../.env up -d
+
+services:
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      # RESILIENCE : les donnees survivent a l'arret, au redemarrage de la VM
+      # et a la suppression des conteneurs.
+      - db_data:/var/lib/postgresql/data
+      # Joue au PREMIER demarrage uniquement. Pour rejouer le schema ensuite,
+      # voir le service `migrate` plus bas.
+      - ../../app/db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    # RESILIENCE : redemarre tout seul apres un crash ou un reboot de la VM.
+    restart: unless-stopped
+
+  backend:
+    image: ${IMAGE_PREFIX}/backend:${TAG:-latest}
+    # Retire toujours l'image la plus recente du registry au `up`.
+    pull_policy: always
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+    depends_on:
+      db:
+        # Attend que la base soit VRAIMENT prete, pas seulement demarree.
+        condition: service_healthy
+    healthcheck:
+      # Interroge /health/ready : la sonde qui teste la base.
+      test: ["CMD-SHELL",
+             "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health/ready').status==200 else 1)\""]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  frontend:
+    image: ${IMAGE_PREFIX}/frontend:${TAG:-latest}
+    pull_policy: always
+    environment:
+      BACKEND_URL: http://backend:8000
+    ports:
+      # Port 80 : l'application est accessible sur http://<ip-de-la-VM>/
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost/healthz || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # Service one-shot : rejoue le schema sur une base DEJA initialisee.
+  # Ne demarre pas avec les autres (profil dedie) :
+  #   docker compose -f docker-compose.prod.yml --env-file ../../.env \
+  #     --profile migrate run --rm migrate
+  migrate:
+    image: postgres:16-alpine
+    profiles: [migrate]
+    environment:
+      PGPASSWORD: ${DB_PASSWORD}
+    volumes:
+      - ../../app/db/init.sql:/sql/init.sql:ro
+    command: >
+      sh -c "psql -h db -U ${DB_USER} -d ${DB_NAME} -v ON_ERROR_STOP=1 -f /sql/init.sql
+             && echo 'migrations appliquees'"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  db_data:
