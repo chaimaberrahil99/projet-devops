@@ -52,7 +52,7 @@ data:
       ],
       "timezone": "browser",
       "schemaVersion": 39,
-      "version": 1,
+      "version": 2,
       "refresh": "10s",
       "time": {
         "from": "now-30m",
@@ -76,7 +76,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(http_requests_total{app=\"backend\"}[2m])) by (endpoint)",
+              "expr": "sum(rate(http_requests_total{app=\"backend\",endpoint!~\"/health.*|/metrics\"}[2m])) by (endpoint)",
               "legendFormat": "{{endpoint}}",
               "refId": "A",
               "datasource": {
@@ -128,7 +128,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(http_requests_total{app=\"backend\",status=~\"5..\"}[2m])) / clamp_min(sum(rate(http_requests_total{app=\"backend\"}[2m])), 0.001)",
+              "expr": "(sum(rate(http_requests_total{app=\"backend\",status=~\"5..\"}[2m])) or vector(0)) / clamp_min(sum(rate(http_requests_total{app=\"backend\"}[2m])), 0.001)",
               "legendFormat": "taux d'erreur",
               "refId": "A",
               "datasource": {
@@ -180,7 +180,7 @@ data:
           },
           "targets": [
             {
-              "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{app=\"backend\"}[2m])) by (le, endpoint))",
+              "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{app=\"backend\",endpoint!~\"/health.*|/metrics\"}[2m])) by (le, endpoint))",
               "legendFormat": "{{endpoint}}",
               "refId": "A",
               "datasource": {

@@ -23,7 +23,11 @@ metadata:
   name: prometheus
 rules:
   - apiGroups: [""]
-    resources: [nodes, nodes/metrics, services, endpoints, pods]
+    # nodes/proxy est indispensable : la collecte cAdvisor passe par le proxy
+    # de l'API Kubernetes (/api/v1/nodes/<noeud>/proxy/metrics/cadvisor).
+    # Sans ce droit, Prometheus recoit un refus 403 et le signal de saturation
+    # reste vide, alors que tout le reste fonctionne.
+    resources: [nodes, nodes/proxy, nodes/metrics, services, endpoints, pods]
     verbs: [get, list, watch]
   - nonResourceURLs: ["/metrics", "/metrics/cadvisor"]
     verbs: [get]

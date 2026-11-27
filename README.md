@@ -442,6 +442,23 @@ ceux qui portent l'annotation `prometheus.io/scrape: "true"` — elle est posée
 sur le Deployment du backend. Ajouter une réplique, ou un nouveau service, ne
 demande donc aucune modification de la configuration de Prometheus.
 
+## Deux pièges rencontrés, et leur correction
+
+**Le panneau Saturation restait vide.** Prometheus collecte cAdvisor en passant
+par le proxy de l'API Kubernetes, ce qui exige la permission `nodes/proxy` dans
+le ClusterRole. Sans elle il reçoit un `403`, et ce signal seul reste vide
+pendant que tous les autres fonctionnent — un symptôme trompeur, puisqu'on
+soupçonne d'abord la requête.
+
+**Le panneau Erreurs affichait « aucune donnée ».** Quand il n'y a aucune
+réponse 5xx, la requête ne renvoie pas zéro : elle ne renvoie *rien*. Un
+`or vector(0)` force la valeur à zéro, ce qui est la bonne lecture — zéro
+erreur est une information, l'absence de donnée n'en est pas une.
+
+Les sondes de santé de Kubernetes sont par ailleurs exclues des panneaux trafic
+et latence : interrogées toutes les cinq secondes, elles écrasaient le trafic
+réel des utilisateurs.
+
 ## Vérifier que la collecte fonctionne
 
 ```bash
