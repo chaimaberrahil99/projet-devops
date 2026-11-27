@@ -10,3 +10,7 @@ venv/
 *.retry
 node_modules/
 .DS_Store
+
+# Documents de preparation a la soutenance : usage interne, pas des livrables.
+docs/demonstration.md
+docs/questions-reponses.md

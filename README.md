@@ -58,6 +58,25 @@ page du dépôt → **Packages** (colonne de droite) → cliquer sur l'image →
 
 C'est aussi ce qui permettra aux autres équipes de déployer vos images.
 
+## Un second workflow, volontairement sans exécution
+
+`.github/workflows/deploy-k8s.yml` apparaît dans l'onglet Actions avec zéro
+exécution. C'est normal et assumé.
+
+Il déployait vers un cluster **distant**, en s'y connectant par SSH avec un
+kubeconfig stocké en secret de dépôt. Il a été écrit quand la production devait
+vivre sur une VM Cloud avec une adresse publique.
+
+L'architecture a changé : le cluster est local et n'a pas d'adresse publique,
+donc GitHub ne peut pas s'y connecter. Nous avons alors inversé le sens du
+déploiement — c'est la machine qui interroge le registry, voir la section 8 —
+et ce workflow est devenu sans objet.
+
+Il est conservé plutôt que supprimé pour deux raisons : il redeviendra
+directement utilisable le jour où le cluster sera hébergé sur un serveur
+accessible, et il documente une étape de notre raisonnement. Le supprimer
+effacerait la trace d'un choix d'architecture qui mérite d'être expliqué.
+
 ---
 
 # 3. Déployer en production sur la VM
@@ -162,9 +181,10 @@ ruff check .
 pytest
 ```
 
-9 tests. Trois ne nécessitent **aucune** base : le pipeline a toujours quelque
-chose de vert. Les six autres se désactivent automatiquement si la base est
-absente, et tournent pour de vrai en CI grâce au service PostgreSQL du job.
+9 tests. **Quatre** ne nécessitent aucune base — sondes de vie, version, et
+validation des entrées — donc le pipeline a toujours quelque chose à vérifier.
+Les cinq autres se désactivent automatiquement si la base est absente, et
+tournent pour de vrai en CI grâce au service PostgreSQL du job.
 
 ---
 

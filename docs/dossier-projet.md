@@ -188,6 +188,34 @@ l'hôte, on n'y démontre donc pas la résilience à la perte d'une machine.
 *Solution :* installer k3s directement sur la machine WSL, avec un nœud unique.
 Nos manifests n'ont demandé aucune modification.
 
+**Un ConfigMap modifié ne redémarre pas les pods.** Rencontré deux fois en une
+heure. Après avoir ajouté la source de données Loki, puis après avoir corrigé
+la configuration de Promtail, `kubectl apply` affichait bien
+`configmap configured` — mais les pods continuaient de tourner avec l'ancienne
+version, chargée en mémoire à leur démarrage. Le seul indice était un discret
+`daemonset unchanged` dans la sortie. *Solution :* un `kubectl rollout restart`
+explicite après toute modification de configuration lue au démarrage. En
+production, on ajoute au Deployment une annotation contenant l'empreinte du
+ConfigMap : elle change avec lui, donc le pod est recréé automatiquement.
+
+**Une découverte automatique qui échoue en silence.** Promtail était configuré
+pour demander à Kubernetes la liste des pods et en déduire le chemin de leurs
+fichiers de logs. Il démarrait sans la moindre erreur, ses droits étaient
+corrects, le montage des fichiers fonctionnait — et pourtant
+`promtail_targets_active_total` restait à zéro et les tableaux de bord étaient
+vides. Aucun message n'expliquait pourquoi. *Solution :* remplacer la
+découverte par quatre chemins explicites, un par composant. Moins élégant —
+ajouter un composant demande une ligne de configuration — mais vérifiable à
+l'œil. La leçon dépasse Promtail : **une configuration déclarative qui échoue
+sans rien dire est pire qu'une configuration verbeuse qui fonctionne.**
+
+**Grafana démarré avant Loki.** Les panneaux de logs restaient vides alors que
+tout était en place. Grafana ne lit ses sources de données **qu'au démarrage** :
+son pod avait six minutes d'avance sur la création de Loki, il ne le
+connaissait donc pas. *Solution :* le redémarrer. C'est une variante du premier
+problème, et elle rappelle qu'un cluster n'applique pas les changements dans
+l'ordre où on les écrit.
+
 ## 4. Points techniques à défendre
 
 **Pourquoi deux sondes de santé.** `/health/live` répond tant que le processus
@@ -244,8 +272,6 @@ contiennent déjà la contrainte de répartition.
 
 **Un `PodDisruptionBudget`**, pour garantir un minimum de pods disponibles
 pendant les opérations de maintenance.
-
-**Logs centralisés** avec Loki, qui s'affiche dans la Grafana déjà en place.
 
 **Le contrat d'interface avec les équipes SysOps** : ports exposés, variables
 d'environnement attendues, chemins des sondes de santé, registry utilisée.
