@@ -4,15 +4,17 @@ metadata:
   name: frontend
   namespace: tasks
 spec:
-  # NodePort : accessible directement sur l'IP des 2 VM, sans LoadBalancer.
-  # Le sujet ne demande pas de "vrai" service de haute disponibilite.
-  type: NodePort
+  # LoadBalancer : k3s embarque "servicelb", qui expose le service sur le
+  # port 80 de chaque noeud. Fonctionne a l'identique en local avec k3d
+  # (http://localhost) et sur de vraies VM k3s (http://<ip-du-noeud>).
+  # Un NodePort est alloue en plus, d'ou la valeur fixee ci-dessous.
+  type: LoadBalancer
   selector:
     app: frontend
   ports:
     - port: 80
       targetPort: 80
-      nodePort: 30080        # http://<ip-d-une-VM>:30080
+      nodePort: 30080
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -34,9 +36,21 @@ spec:
       labels:
         app: frontend
     spec:
+      # Repartit les 2 repliques sur des NOEUDS DIFFERENTS.
+      # Sans cette contrainte, Kubernetes peut placer les deux sur la meme
+      # machine -- et la perte de ce noeud couperait le service malgre les
+      # 2 repliques. C'est ce qui rend la demonstration de resilience vraie.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: frontend
       containers:
         - name: frontend
-          image: ghcr.io/OWNER/REPO/frontend:latest
+          image: ghcr.io/chaimaberrahil99/projet-devops/frontend:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 80
           env:

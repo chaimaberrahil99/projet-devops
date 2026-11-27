@@ -278,3 +278,123 @@ dépôt **public**, n'importe qui peut ouvrir une pull request dont le code
 s'exécuterait sur la machine hôte. GitHub le déconseille explicitement. Le
 déploiement tiré n'a pas ce défaut, puisque la machine ne fait que télécharger
 des images.
+
+
+---
+
+# 9. Cluster k3s local (multi-nœuds)
+
+La production décrite plus haut tourne en Docker Compose. Cette section décrit
+le déploiement sur un cluster **k3s**, monté en local avec **k3d**.
+
+## Pourquoi k3d, et pourquoi plusieurs nœuds
+
+k3d lance k3s dans des conteneurs Docker : un serveur et deux agents, chacun
+avec son propre kubelet. Kubernetes les traite comme des machines distinctes —
+planification, répartition des pods et vidange d'un nœud fonctionnent
+réellement.
+
+Un cluster n'a d'intérêt que s'il répartit la charge entre plusieurs machines :
+on peut alors montrer qu'un nœud tombe sans que le service s'interrompe. C'est
+impossible avec le Kubernetes mono-nœud de Docker Desktop.
+
+À dire tel quel : ce sont des conteneurs, pas des machines virtuelles, mais la
+distribution est bien k3s et le cluster est authentiquement multi-nœuds. Le
+passage à de vraies VM ne change que le support — mêmes manifests, mêmes
+commandes, même distribution.
+
+Deux avantages pratiques de k3s : `metrics-server` est inclus d'origine, donc
+l'auto-scaling fonctionne sans rien installer ; et `servicelb` fournit les
+services de type LoadBalancer, qui exposent l'application sur le port 80.
+
+## Prérequis
+
+```bash
+curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+chmod +x kubectl && sudo mv kubectl /usr/local/bin/kubectl
+
+k3d version && kubectl version --client
+```
+
+## Tout monter en une commande
+
+```bash
+./infra/k8s/bootstrap.sh
+```
+
+Le script crée le cluster, attend `metrics-server`, déploie l'application,
+applique le schéma via un Job dédié, et affiche la répartition des pods.
+Comptez cinq à dix minutes au premier lancement.
+
+Application sur **http://localhost**.
+
+Pour repartir de zéro : `k3d cluster delete projet-devops`
+
+## Déploiement continu vers le cluster
+
+```bash
+./infra/k8s/watch-deploy-k8s.sh
+```
+
+Il interroge le registry, lit le **digest** des images — leur empreinte unique —
+et déclenche un `kubectl set image` dès qu'elle change. Deux raisons d'épingler
+le digest plutôt que le tag `latest` : un tag peut changer de contenu sans
+prévenir, alors qu'un digest désigne un contenu précis pour toujours ; et
+comme la valeur change réellement, Kubernetes déclenche la mise à jour.
+
+En cas d'échec du déploiement, le script restaure la version précédente avec
+`kubectl rollout undo`.
+
+## Les trois démonstrations
+
+### Mise à jour sans interruption
+
+```bash
+# Terminal 1 : preuve de la continuité de service
+while true; do curl -s -o /dev/null -w "%{http_code} " http://localhost/api/version; sleep 0.3; done
+
+# Terminal 2 : les pods remplacés un par un
+kubectl get pods -n tasks -w
+```
+
+Poussez un commit. Le badge de version bascule dans l'interface, le terminal 1
+n'affiche que des `200`, et le terminal 2 montre les anciens pods remplacés
+progressivement.
+
+Ce qui le garantit : `replicas: 2`, `maxUnavailable: 0` et `maxSurge: 1`.
+Kubernetes démarre un pod neuf, attend que sa `readinessProbe` passe au vert,
+et seulement ensuite retire un ancien pod.
+
+### Auto-scaling
+
+```bash
+kubectl get hpa -n tasks -w
+
+kubectl run -n tasks charge --rm -it --image=busybox --restart=Never -- \
+  sh -c 'while true; do wget -q -O- http://backend:8000/api/stats; done'
+```
+
+Le nombre de répliques monte de 2 vers 6 quand l'utilisation processeur dépasse
+70 % de la demande, puis redescend après cinq minutes de calme.
+
+### Résilience : perte d'un nœud
+
+```bash
+kubectl get nodes
+kubectl get pods -n tasks -o wide          # voir la répartition
+
+kubectl drain k3d-projet-devops-agent-0 --ignore-daemonsets --delete-emptydir-data
+kubectl get pods -n tasks -o wide          # tout a migré sur l'autre nœud
+```
+
+L'application continue de répondre pendant toute l'opération. Pour remettre le
+nœud en service : `kubectl uncordon k3d-projet-devops-agent-0`.
+
+Vérifiez le nom exact du nœud avec `kubectl get nodes` avant de lancer le
+`drain`.
+
+C'est la contrainte `topologySpreadConstraints` des Deployments qui répartit les
+répliques sur des nœuds différents — sans elle, les deux pourraient se retrouver
+sur la même machine, et sa perte couperait le service malgré les deux répliques.

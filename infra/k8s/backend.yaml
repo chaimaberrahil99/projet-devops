@@ -38,11 +38,23 @@ spec:
       labels:
         app: backend
     spec:
+      # Repartit les 2 repliques sur des NOEUDS DIFFERENTS.
+      # Sans cette contrainte, Kubernetes peut placer les deux sur la meme
+      # machine -- et la perte de ce noeud couperait le service malgre les
+      # 2 repliques. C'est ce qui rend la demonstration de resilience vraie.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: backend
       containers:
         - name: backend
           # Placeholder : le pipeline remplace ce tag a chaque deploiement via
-          # `kubectl set image`. Remplacez OWNER/REPO par votre depot.
-          image: ghcr.io/OWNER/REPO/backend:latest
+          # `kubectl set image`, en epinglant le digest de la nouvelle image.
+          image: ghcr.io/chaimaberrahil99/projet-devops/backend:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 8000
           envFrom:
