@@ -5,8 +5,8 @@ metadata:
   namespace: tasks
 spec:
   # LoadBalancer : k3s embarque "servicelb", qui expose le service sur le
-  # port 80 de chaque noeud. Fonctionne a l'identique en local avec k3d
-  # (http://localhost) et sur de vraies VM k3s (http://<ip-du-noeud>).
+  # port 80 du noeud. L'application est donc sur http://localhost, et sur
+  # http://<ip-de-la-machine> depuis le reseau.
   # Un NodePort est alloue en plus, d'ou la valeur fixee ci-dessous.
   type: LoadBalancer
   selector:
@@ -36,10 +36,11 @@ spec:
       labels:
         app: frontend
     spec:
-      # Repartit les 2 repliques sur des NOEUDS DIFFERENTS.
-      # Sans cette contrainte, Kubernetes peut placer les deux sur la meme
-      # machine -- et la perte de ce noeud couperait le service malgre les
-      # 2 repliques. C'est ce qui rend la demonstration de resilience vraie.
+      # Repartirait les repliques sur des noeuds differents s'il y en avait
+      # plusieurs. Le cluster n'ayant qu'un noeud, la contrainte est sans effet
+      # ici -- `ScheduleAnyway` garantit qu'elle ne bloque jamais le
+      # deploiement. Elle est conservee pour qu'un ajout de noeud soit
+      # immediatement exploite, sans modification des manifests.
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname

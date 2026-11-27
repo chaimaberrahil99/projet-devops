@@ -45,10 +45,11 @@ spec:
         prometheus.io/port: "8000"
         prometheus.io/path: /metrics
     spec:
-      # Repartit les 2 repliques sur des NOEUDS DIFFERENTS.
-      # Sans cette contrainte, Kubernetes peut placer les deux sur la meme
-      # machine -- et la perte de ce noeud couperait le service malgre les
-      # 2 repliques. C'est ce qui rend la demonstration de resilience vraie.
+      # Repartirait les repliques sur des noeuds differents s'il y en avait
+      # plusieurs. Le cluster n'ayant qu'un noeud, la contrainte est sans effet
+      # ici -- `ScheduleAnyway` garantit qu'elle ne bloque jamais le
+      # deploiement. Elle est conservee pour qu'un ajout de noeud soit
+      # immediatement exploite, sans modification des manifests.
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname

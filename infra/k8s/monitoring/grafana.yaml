@@ -332,8 +332,8 @@ metadata:
   name: grafana
   namespace: monitoring
 spec:
-  # LoadBalancer : k3s l'expose sur le port 3000 de chaque noeud, et k3d le
-  # redirige vers http://localhost:3000 sur la machine hote.
+  # LoadBalancer : k3s l'expose sur le port 3000 du noeud, donc sur
+  # http://localhost:3000.
   type: LoadBalancer
   selector:
     app: grafana

@@ -168,19 +168,22 @@ absente, et tournent pour de vrai en CI grâce au service PostgreSQL du job.
 
 ---
 
-# 7. Kubernetes — pour plus tard
+# 7. Deux environnements, deux mécanismes
 
-Les manifests sont prêts dans `infra/k8s/` (`StatefulSet` pour la base,
-Deployments avec `maxUnavailable: 0`, `HorizontalPodAutoscaler`, Job de
-migration), et le workflow `deploy-k8s.yml` les applique. Ils ne sont **pas
-utilisés** par la production actuelle, qui tourne en Docker Compose.
+Le projet se déploie de deux façons, et c'est volontaire.
 
-Pour y passer : un cluster joignable, le secret de dépôt `KUBE_CONFIG`
-(`base64 -w0 ~/.kube/config`), et `metrics-server` installé sur le cluster —
-sans lui l'HPA reste bloqué sur `<unknown>`. Puis onglet Actions →
-*Déploiement Kubernetes* → *Run workflow*.
+| | Docker Compose | Kubernetes (k3s) |
+|---|---|---|
+| Où | `infra/compose/` | `infra/k8s/` |
+| Mise à jour | redémarrage des conteneurs | mise à jour progressive, sans coupure |
+| Mise à l'échelle | manuelle | automatique (HPA) |
+| Rôle | solution de repli, et environnement de staging | la production |
 
----
+Les deux tirent **les mêmes images** du registry et partagent le même
+`app/db/init.sql`. Passer de l'un à l'autre ne change aucune ligne de code.
+
+Garder Docker Compose opérationnel est une sécurité : si le cluster pose
+problème, une production reste démontrable en une commande.
 
 # Arborescence
 
@@ -193,11 +196,11 @@ infra/
   compose/    docker-compose.yml (staging)
               docker-compose.prod.yml (production VM)
               deploy.sh (déploiement en une commande)
-  k8s/        manifests Kubernetes (pour plus tard)
+  k8s/        install-k3s.sh, bootstrap.sh, manifests, watch-deploy-k8s.sh
+              monitoring/  Prometheus et Grafana
   ansible/    (à venir)
 .github/workflows/
-  ci-cd.yml        qualité + build + publication  — automatique
-  deploy-k8s.yml   déploiement Kubernetes         — manuel
+  ci-cd.yml   qualité + build + publication — automatique
 docs/         dossier de projet
 .env          configuration, volontairement versionnée (aucun secret)
 ```
@@ -282,55 +285,48 @@ des images.
 
 ---
 
-# 9. Cluster k3s local (multi-nœuds)
+# 9. Cluster k3s
 
-La production décrite plus haut tourne en Docker Compose. Cette section décrit
-le déploiement sur un cluster **k3s**, monté en local avec **k3d**.
+k3s est installé **directement sur la machine**, pas dans des conteneurs.
 
-## Pourquoi k3d, et pourquoi plusieurs nœuds
-
-k3d lance k3s dans des conteneurs Docker : un serveur et deux agents, chacun
-avec son propre kubelet. Kubernetes les traite comme des machines distinctes —
-planification, répartition des pods et vidange d'un nœud fonctionnent
-réellement.
-
-Un cluster n'a d'intérêt que s'il répartit la charge entre plusieurs machines :
-on peut alors montrer qu'un nœud tombe sans que le service s'interrompe. C'est
-impossible avec le Kubernetes mono-nœud de Docker Desktop.
-
-À dire tel quel : ce sont des conteneurs, pas des machines virtuelles, mais la
-distribution est bien k3s et le cluster est authentiquement multi-nœuds. Le
-passage à de vraies VM ne change que le support — mêmes manifests, mêmes
-commandes, même distribution.
-
-Deux avantages pratiques de k3s : `metrics-server` est inclus d'origine, donc
-l'auto-scaling fonctionne sans rien installer ; et `servicelb` fournit les
-services de type LoadBalancer, qui exposent l'application sur le port 80.
-
-## Prérequis
-
-```bash
-curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
-
-curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-chmod +x kubectl && sudo mv kubectl /usr/local/bin/kubectl
-
-k3d version && kubectl version --client
+```
+Machine WSL  =  la VM
+Cette machine =  l'unique nœud du cluster
+Vos pods      =  conteneurs gérés par containerd, sur cette machine
 ```
 
-## Tout monter en une commande
+Aucun emboîtement : pas de conteneur-nœud, pas de conteneur dans un conteneur.
+k3s s'installe comme un service système ordinaire, géré par systemd.
+
+C'est un choix assumé. Les outils du type k3d ou kind créent des clusters
+multi-nœuds en local en faisant tourner chaque nœud dans un conteneur
+privilégié, qui exécute lui-même ses propres conteneurs. Ça fonctionne, mais
+tous ces nœuds partagent le noyau de l'hôte : on ne démontre alors pas la
+résilience à la perte d'une machine, seulement à celle d'un nœud logique.
+Ici, l'empilement reste lisible et honnête.
+
+## Installation, une seule fois
+
+```bash
+./infra/k8s/install-k3s.sh
+```
+
+Le script vérifie que systemd est actif — k3s en a besoin, et sous WSL il faut
+parfois l'activer — installe k3s, et configure `kubectl`.
+
+Pour désinstaller : `/usr/local/bin/k3s-uninstall.sh`
+
+## Déployer l'application
 
 ```bash
 ./infra/k8s/bootstrap.sh
 ```
 
-Le script crée le cluster, attend `metrics-server`, déploie l'application,
-applique le schéma via un Job dédié, et affiche la répartition des pods.
-Comptez cinq à dix minutes au premier lancement.
+Le script attend `metrics-server` (inclus dans k3s), applique les manifests,
+crée le schéma via un Job dédié, déploie Prometheus et Grafana, puis affiche
+l'état. Il est idempotent : relancez-le autant que nécessaire.
 
-Application sur **http://localhost**.
-
-Pour repartir de zéro : `k3d cluster delete projet-devops`
+Application sur **http://localhost**, Grafana sur **http://localhost:3000**.
 
 ## Déploiement continu vers le cluster
 
@@ -341,10 +337,10 @@ Pour repartir de zéro : `k3d cluster delete projet-devops`
 Il interroge le registry, lit le **digest** des images — leur empreinte unique —
 et déclenche un `kubectl set image` dès qu'elle change. Deux raisons d'épingler
 le digest plutôt que le tag `latest` : un tag peut changer de contenu sans
-prévenir, alors qu'un digest désigne un contenu précis pour toujours ; et
-comme la valeur change réellement, Kubernetes déclenche la mise à jour.
+prévenir, alors qu'un digest désigne un contenu précis pour toujours ; et comme
+la valeur change réellement, Kubernetes déclenche la mise à jour.
 
-En cas d'échec du déploiement, le script restaure la version précédente avec
+En cas d'échec, le script restaure la version précédente avec
 `kubectl rollout undo`.
 
 ## Les trois démonstrations
@@ -365,7 +361,9 @@ progressivement.
 
 Ce qui le garantit : `replicas: 2`, `maxUnavailable: 0` et `maxSurge: 1`.
 Kubernetes démarre un pod neuf, attend que sa `readinessProbe` passe au vert,
-et seulement ensuite retire un ancien pod.
+et seulement ensuite retire un ancien pod. Deux répliques suffisent, même sur
+un seul nœud — ce qui est démontré ici, c'est la continuité pendant un
+déploiement, pas la tolérance à la panne d'une machine.
 
 ### Auto-scaling
 
@@ -373,34 +371,32 @@ et seulement ensuite retire un ancien pod.
 kubectl get hpa -n tasks -w
 
 kubectl run -n tasks charge --rm -it --image=busybox --restart=Never -- \
-  sh -c 'while true; do wget -q -O- http://backend:8000/api/stats; done'
+  sh -c 'while true; do wget -q -O /dev/null http://backend:8000/api/stats; done'
 ```
 
 Le nombre de répliques monte de 2 vers 6 quand l'utilisation processeur dépasse
 70 % de la demande, puis redescend après cinq minutes de calme.
 
-### Résilience : perte d'un nœud
-
+Pour voir la décision écrite :
 ```bash
-kubectl get nodes
-kubectl get pods -n tasks -o wide          # voir la répartition
-
-kubectl drain k3d-projet-devops-agent-0 --ignore-daemonsets --delete-emptydir-data
-kubectl get pods -n tasks -o wide          # tout a migré sur l'autre nœud
+kubectl describe hpa backend -n tasks | tail -5
 ```
 
-L'application continue de répondre pendant toute l'opération. Pour remettre le
-nœud en service : `kubectl uncordon k3d-projet-devops-agent-0`.
+### Résilience : perte d'un pod
 
-Vérifiez le nom exact du nœud avec `kubectl get nodes` avant de lancer le
-`drain`.
+```bash
+kubectl get pods -n tasks
+kubectl delete pod -n tasks -l app=backend --field-selector status.phase=Running --wait=false
+kubectl get pods -n tasks -w
+```
 
-C'est la contrainte `topologySpreadConstraints` des Deployments qui répartit les
-répliques sur des nœuds différents — sans elle, les deux pourraient se retrouver
-sur la même machine, et sa perte couperait le service malgré les deux répliques.
+Kubernetes recrée immédiatement les pods supprimés pour revenir au nombre
+demandé. Avec la boucle `curl` ouverte à côté, on voit que le service ne
+s'interrompt pas : l'autre réplique absorbe le trafic le temps que la nouvelle
+démarre.
 
-
----
+C'est la différence entre un conteneur et un pod géré : personne ne relance
+quoi que ce soit, l'état désiré est déclaré et Kubernetes le maintient.
 
 # 10. Observabilité — Prometheus et Grafana
 
