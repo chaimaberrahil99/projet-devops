@@ -45,50 +45,68 @@ data:
   promtail.yaml: |
     server:
       http_listen_port: 9080
-      # `info` et non `warn` : une collecte vide ne produit aucun avertissement,
-      # donc sans ce niveau on ne voit rien du tout.
       log_level: info
 
     positions:
-      # Memorise ou en est la lecture de chaque fichier, pour ne pas tout
-      # renvoyer apres un redemarrage.
       filename: /run/promtail/positions.yaml
 
     clients:
       - url: http://loki:3100/loki/api/v1/push
 
+    # Configuration EXPLICITE plutot que decouverte automatique.
+    #
+    # La decouverte via l'API Kubernetes est plus elegante -- elle s'adapte
+    # toute seule aux nouveaux pods -- mais elle depend d'une chaine de
+    # relabeling et de droits qui, quand elle echoue, ne produit aucun message
+    # d'erreur : juste zero cible et des tableaux de bord vides. On a prefere
+    # declarer les trois chemins.
+    #
+    # Les fichiers vivent dans /var/log/pods/<namespace>_<pod>_<uid>/<conteneur>/
+    # Le motif ci-dessous attrape donc tous les pods d'un meme Deployment,
+    # repliques comprises, et continue de fonctionner quand ils sont recrees.
     scrape_configs:
-      - job_name: pods
-        kubernetes_sd_configs:
-          - role: pod
+
+      - job_name: backend
+        static_configs:
+          - targets: [localhost]
+            labels:
+              namespace: tasks
+              app: backend
+              __path__: /var/log/pods/tasks_backend-*/*/*.log
         pipeline_stages:
-          # Les logs de containerd ont un format particulier : horodatage,
-          # flux, indicateur, puis le message. Cette etape les decode.
+          # Decode le format de containerd : horodatage, flux, indicateur,
+          # puis le message.
           - cri: {}
-        relabel_configs:
-          # Note : on ne filtre PAS par noeud. Le filtre habituel s'appuie sur
-          # une variable d'environnement substituee dans ce fichier ; si la
-          # substitution echoue, il rejette tout et les tableaux de bord
-          # restent vides sans message d'erreur. Avec un seul noeud il est
-          # inutile, et avec plusieurs les chemins des autres noeuds ne
-          # correspondent simplement a aucun fichier local.
 
-          # Etiquettes qui serviront a filtrer dans Grafana.
-          - source_labels: [__meta_kubernetes_namespace]
-            target_label: namespace
-          - source_labels: [__meta_kubernetes_pod_name]
-            target_label: pod
-          - source_labels: [__meta_kubernetes_pod_container_name]
-            target_label: container
-          - source_labels: [__meta_kubernetes_pod_label_app]
-            target_label: app
+      - job_name: frontend
+        static_configs:
+          - targets: [localhost]
+            labels:
+              namespace: tasks
+              app: frontend
+              __path__: /var/log/pods/tasks_frontend-*/*/*.log
+        pipeline_stages:
+          - cri: {}
 
-          # Chemin reel des fichiers sur le noeud, deduit de l'identifiant du
-          # pod et du nom du conteneur.
-          - source_labels: [__meta_kubernetes_pod_uid, __meta_kubernetes_pod_container_name]
-            separator: /
-            replacement: /var/log/pods/*$1/*.log
-            target_label: __path__
+      - job_name: postgres
+        static_configs:
+          - targets: [localhost]
+            labels:
+              namespace: tasks
+              app: postgres
+              __path__: /var/log/pods/tasks_postgres-*/*/*.log
+        pipeline_stages:
+          - cri: {}
+
+      - job_name: supervision
+        static_configs:
+          - targets: [localhost]
+            labels:
+              namespace: monitoring
+              app: supervision
+              __path__: /var/log/pods/monitoring_*/*/*.log
+        pipeline_stages:
+          - cri: {}
 ---
 apiVersion: apps/v1
 kind: DaemonSet
