@@ -326,7 +326,33 @@ Le script attend `metrics-server` (inclus dans k3s), applique les manifests,
 crée le schéma via un Job dédié, déploie Prometheus et Grafana, puis affiche
 l'état. Il est idempotent : relancez-le autant que nécessaire.
 
-Application sur **http://localhost**, Grafana sur **http://localhost:3000**.
+## Accéder à l'application depuis Windows
+
+Depuis WSL, `http://localhost` fonctionne. **Depuis le navigateur Windows, il
+faut l'adresse IP de la machine WSL :**
+
+```bash
+hostname -I      # prendre la première adresse, du type 172.x.x.x
+```
+
+Application sur `http://<IP>`, Grafana sur `http://<IP>:3000`.
+
+Pourquoi cette différence : WSL relaie vers Windows les ports sur lesquels un
+processus **écoute réellement**. Or k3s n'ouvre aucun processus en écoute — il
+installe des règles de routage dans le pare-feu de la machine Linux, que WSL
+ne détecte pas. En passant par l'adresse IP, la requête atteint vraiment
+l'interface réseau Linux et le routage s'applique.
+
+Avec Docker Compose, la question ne se posait pas : Docker Desktop lance un
+processus côté Windows qui écoute sur le port publié.
+
+**Cette adresse change à chaque redémarrage de WSL** — la revérifier avant
+toute démonstration.
+
+`kubectl port-forward --address 0.0.0.0 svc/frontend 8080:80` rétablirait
+`localhost`, puisqu'il ouvre un vrai socket d'écoute. On l'évite en
+démonstration : c'est un tunnel de débogage, qui court-circuite l'exposition
+réelle du service et fonctionnerait même si celle-ci était mal configurée.
 
 ## Déploiement continu vers le cluster
 

@@ -8,6 +8,28 @@ Les huit points demandés, dans l'ordre, avec les commandes exactes.
 
 ## Avant l'arrivée du prof
 
+### Relever l'adresse de la machine
+
+**Terminal 4 :**
+```bash
+hostname -I
+```
+
+Prenez la première adresse, du type `172.x.x.x`. **C'est elle qu'il faut
+ouvrir dans le navigateur Windows**, et non `localhost`.
+
+Pourquoi : k3s n'ouvre aucun processus en écoute, il installe des règles de
+routage dans le pare-feu de la machine Linux. Or WSL ne relaie vers Windows
+que les ports sur lesquels un processus écoute réellement — il ne voit donc
+pas ces règles. En passant par l'adresse IP, on s'adresse directement à la
+machine Linux et le routage s'applique.
+
+**Cette adresse change à chaque redémarrage de WSL.** Vérifiez-la juste avant
+de commencer, et mettez-la en favori.
+
+Les terminaux, eux, restent sur `localhost` : ils s'exécutent à l'intérieur de
+WSL. Seul le navigateur Windows a besoin de l'adresse IP.
+
 ### Vérifier que tout tourne
 
 ```bash
@@ -31,11 +53,12 @@ cd ~/projet-devops && ./infra/k8s/watch-deploy-k8s.sh
 |---|---|---|
 | T1 | la surveillance | `./infra/k8s/watch-deploy-k8s.sh` |
 | T2 | preuve de continuité | `while true; do curl -s -o /dev/null -w "%{http_code} " http://localhost/api/version; sleep 0.3; done` |
+| | | (`localhost` convient ici : la commande tourne dans WSL) |
 | T3 | les pods | `kubectl get pods -n tasks -w` |
 | T4 | libre | |
 
-Et trois onglets de navigateur : l'application sur `http://localhost`, Grafana
-sur `http://localhost:3000`, et l'onglet Actions du dépôt.
+Et trois onglets de navigateur : l'application sur `http://<IP-WSL>`, Grafana
+sur `http://<IP-WSL>:3000`, et l'onglet Actions du dépôt.
 
 **Sur le PC de Chaima** : le dépôt GitHub et un PowerShell dans
 `Documents\projet-devops`.

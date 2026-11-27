@@ -88,6 +88,57 @@ opérationnelle. Les manifests Kubernetes restent dans le dépôt pour la suite.
 
 ---
 
+**Intégration WSL de Docker désactivée.** Docker Desktop expose la commande
+`docker` à Windows, mais pas automatiquement à l'intérieur d'une distribution
+WSL. Les commandes échouaient, et notre script de surveillance masquait
+l'erreur réelle derrière un message trompeur. *Solution :* activer
+l'intégration dans Docker Desktop, et surtout corriger le script pour qu'il
+affiche le message exact plutôt que de le supprimer. Un script qui cache les
+erreurs coûte plus cher qu'il ne rapporte.
+
+**Un `git pull` refusé par une modification locale.** Une coéquipière avait
+modifié `.env` à la main ; la même valeur a ensuite été committée. Git a refusé
+la fusion, et le script attendu n'a jamais été téléchargé — l'erreur suivante,
+« No such file or directory », pointait donc ailleurs que la cause.
+*Solution :* `git checkout -- .env`, puis committer la valeur par défaut dans
+le dépôt pour que le cas ne se reproduise plus.
+
+**Permission `nodes/proxy` manquante pour Prometheus.** Un seul panneau de
+Grafana restait vide, celui de la saturation, pendant que les trois autres
+fonctionnaient — symptôme trompeur, on soupçonne d'abord la requête. La cause
+était trois niveaux plus loin : la collecte cAdvisor passe par le proxy de
+l'API Kubernetes, ce qui exige un droit que notre ClusterRole n'accordait pas.
+*Solution :* ajouter `nodes/proxy`, et prendre le réflexe de vérifier la page
+`/targets` de Prometheus avant de soupçonner le tableau de bord.
+
+**« Aucune donnée » au lieu de zéro.** Sans aucune réponse 5xx, la requête du
+taux d'erreur ne renvoyait pas zéro : elle ne renvoyait rien. *Solution :*
+`or vector(0)`. Zéro erreur est une information, l'absence de donnée n'en est
+pas une.
+
+**Un cluster qui répond n'est pas un cluster prêt.** Notre script de
+déploiement échouait sur `metrics-server not found` : k3s crée ce composant
+plusieurs dizaines de secondes après que le nœud passe en `Ready`.
+*Solution :* attendre explicitement que la ressource existe avant d'en vérifier
+l'état, au lieu de le supposer.
+
+**Les ports de k3s ne sont pas relayés par WSL.** Depuis WSL, l'application
+répondait ; depuis le navigateur Windows, rien. WSL relaie les ports sur
+lesquels un processus **écoute** réellement, or k3s installe des règles de
+routage dans le pare-feu, qu'il ne détecte pas. Avec Docker Compose la question
+ne se posait pas, Docker Desktop lançant un processus côté Windows.
+*Solution :* accéder à l'application par l'adresse IP de la machine WSL
+(`hostname -I`). Nous avons écarté `kubectl port-forward`, qui rétablirait
+`localhost` mais court-circuite l'exposition réelle du service.
+
+**Architecture du cluster revue en cours de route.** Nous avions d'abord monté
+un cluster multi-nœuds avec k3d, où chaque nœud est un conteneur privilégié
+exécutant ses propres conteneurs. L'encadrant a écarté cet emboîtement, et
+l'argument technique nous a convaincus : ces nœuds partagent le noyau de
+l'hôte, on n'y démontre donc pas la résilience à la perte d'une machine.
+*Solution :* installer k3s directement sur la machine WSL, avec un nœud unique.
+Nos manifests n'ont demandé aucune modification.
+
 ## 4. Points techniques à défendre
 
 **Pourquoi deux sondes de santé.** `/health/live` répond tant que le processus
