@@ -2,31 +2,74 @@
 
 **Équipe :** Berrahil Chaima · Thiam Astou · Gomes Pinto Pedro
 **Dépôt :** https://github.com/chaimaberrahil99/projet-devops
-**Date :** 26 novembre 2026
+**Date :** 27 novembre 2026
 
 ---
 
 ## 1. Architecture déployée
 
-L'application est découpée en trois composants, chacun isolé dans son propre
-conteneur :
+L'application est découpée en trois composants, chacun isolé dans son conteneur :
 
 | Composant | Techno | Rôle |
 |---|---|---|
 | Frontend | HTML/JS servi par Nginx | interface et tableau de bord ; relaie `/api` vers le backend |
-| Backend | Python / FastAPI | API REST, agrégations SQL, sondes de santé |
+| Backend | Python / FastAPI | API REST, agrégations SQL, sondes de santé, métriques |
 | Base de données | PostgreSQL 16 | 240 lignes sur 6 catégories et 90 jours |
 
-**Deux environnements**, construits à partir du même code :
+### La chaîne, de bout en bout
 
-- **Staging** — `docker compose` en local, images construites sur place.
-- **Production** — `docker compose` sur VM, images **tirées du registry**, jamais
-  construites sur place.
+```
+  poste du développeur
+          │  git push
+          ▼
+  GitHub Actions ─── ruff ─── 9 tests pytest (PostgreSQL réel)
+          │
+          │  si tout passe
+          ▼
+  GHCR  (registry public)  ·  2 images taguées au SHA du commit
+          │
+          │  interrogé toutes les minutes
+          ▼
+  machine de production ─── lecture du digest ─── kubectl set image
+          │
+          ▼
+  cluster k3s ─── mise à jour progressive, sans coupure
+          │
+          ├── 2 pods backend     ── /metrics ──┐
+          ├── 2 pods frontend                  │
+          └── 1 pod PostgreSQL (StatefulSet)   │
+                                               ▼
+                             Prometheus ──► Grafana (4 signaux SRE)
+```
 
-**Chaîne complète :** un commit déclenche le pipeline, qui joue l'analyse
-statique et les tests, construit les deux images Docker et les publie sur GHCR.
-La production télécharge ensuite ces images depuis le registry. La machine de
-production ne connaît jamais le code source, uniquement des images versionnées.
+La machine de production ne connaît jamais le code source : seulement des
+images versionnées, tirées du registry.
+
+### Les deux environnements
+
+| | Staging | Production |
+|---|---|---|
+| Outil | Docker Compose | Kubernetes (k3s) |
+| Images | construites localement | tirées du registry |
+| Mise à jour | manuelle, `up --build` | automatique, progressive |
+| Mise à l'échelle | aucune | automatique, 2 à 6 pods |
+| Rôle | développer et tester | servir, et démontrer |
+
+Les deux partagent le même code et le même `app/db/init.sql`. Docker Compose
+reste opérationnel : c'est la solution de repli si le cluster pose problème.
+
+### Le support
+
+k3s est installé **directement** sur une machine WSL, sans emboîtement : la VM
+est WSL, le nœud du cluster est cette même machine, et les pods sont des
+conteneurs gérés par containerd.
+
+Nous avions d'abord monté un cluster multi-nœuds avec k3d, où chaque nœud est
+un conteneur privilégié exécutant ses propres conteneurs. Nous l'avons
+abandonné : ces nœuds partagent le noyau de l'hôte, on n'y démontre donc pas
+la résilience à la perte d'une machine. Ajouter un vrai second nœud ne
+demanderait qu'une commande `k3s agent` sur une autre machine — les manifests
+sont déjà écrits pour en tirer parti.
 
 ---
 
@@ -41,9 +84,15 @@ production ne connaît jamais le code source, uniquement des images versionnées
 | Sondes de santé | deux sondes distinctes | `/health/live` ne teste pas la base, `/health/ready` la teste — voir section 3 |
 | CI/CD | GitHub Actions | fichier YAML versionné (contrainte d'IaC respectée), aucun serveur à héberger, aucun secret à configurer |
 | Registry | GHCR (GitHub Container Registry) | authentification par le `GITHUB_TOKEN` automatique, zéro configuration |
-| Production | Docker Compose sur VM | Kubernetes non obligatoire ; une production qui fonctionne a été préférée à un cluster incomplet dans le temps imparti |
-| Kubernetes | manifests écrits, déploiement en workflow manuel | prêts pour la suite, volontairement non activés |
-| Migrations | script SQL séparé et idempotent | jamais jouées au démarrage de l'application (voir section 3) |
+| Production | Kubernetes (k3s), nœud unique | k3s est du vrai Kubernetes, installable en une commande, et embarque `metrics-server` et `servicelb` ; installé directement sur la machine, sans emboîtement |
+| Staging | Docker Compose | construit depuis les sources, sert aussi de solution de repli |
+| Déploiement continu | surveillance du registry, en mode « tiré » | la machine n'a pas d'adresse publique, GitHub ne peut donc pas la joindre ; on inverse le flux — principe du GitOps |
+| Version déployée | épinglage par digest | un tag peut changer de contenu, un digest désigne un contenu précis pour toujours |
+| Zéro-interruption | 2 répliques, `maxUnavailable: 0`, `readinessProbe` réelle | les trois sont nécessaires : sans l'une, la coupure revient |
+| Auto-scaling | HPA sur le processeur, 2 à 6 pods, seuil 70 % | 70 % et non 90 % pour laisser aux nouveaux pods le temps de démarrer |
+| Observabilité | Prometheus et Grafana, 4 signaux SRE | métriques applicatives exposées par le code, saturation mesurée par cAdvisor |
+| Découverte des cibles | annotations sur les pods | aucune liste à tenir à jour : ajouter une réplique ne demande aucune reconfiguration |
+| Migrations | Job dédié, script SQL idempotent | jamais jouées au démarrage de l'application (voir section 3) |
 
 ---
 
@@ -169,8 +218,8 @@ même schéma, donc on ajoute des colonnes sans jamais en renommer ni en supprim
 | Membre | Rôle | Réalisations |
 |---|---|---|
 | **Berrahil Chaima** | Dépôt Git et CI/CD | création du dépôt public, mise en place du pipeline GitHub Actions (analyse statique, tests, construction et publication des images), configuration du registry et de la visibilité des packages |
-| **Thiam Astou** | Infrastructure et production | préparation de la machine de production, installation de Docker, déploiement de la stack applicative, vérification de la résilience |
-| **Gomes Pinto Pedro** | Application et validation | exécution de l'environnement de staging, validation du fonctionnement des trois composants, préparation et répétition de la démonstration |
+| **Thiam Astou** | Infrastructure et production | préparation de la machine, Docker puis k3s, déploiement de la stack et de la supervision, diagnostic de l'intégration WSL et de l'accès réseau, service systemd, exploitation au quotidien |
+| **Gomes Pinto Pedro** | Staging et validation | environnement de développement construit depuis les sources, validation des trois composants, seconde instance démontrant la portabilité, correction de la commande de démonstration du redémarrage automatique |
 
 Documentation et dossier de projet : rédaction commune.
 
@@ -178,9 +227,27 @@ Documentation et dossier de projet : rédaction commune.
 
 ## 6. Reste à faire
 
-- Playbooks Ansible pour automatiser l'installation de l'environnement
-- Bascule vers Kubernetes (manifests déjà écrits, `metrics-server` requis pour l'auto-scaling)
-- Observabilité : Prometheus et Grafana, en coordination avec les équipes SysOps
-- Logs centralisés (Loki)
-- Contrat d'interface commun avec les autres équipes : ports exposés, variables
-  d'environnement attendues, chemins des sondes de santé, registry utilisée
+Par ordre d'importance.
+
+**Déploiement par tag de version.** C'est notre principale faiblesse : on
+déploie toujours la dernière image, sans pouvoir revenir à celle d'hier. Les
+images portent pourtant déjà un tag au SHA du commit — il suffirait de piloter
+le déploiement par ce tag.
+
+**Playbooks Ansible** pour automatiser l'installation de la machine. Aujourd'hui,
+`install-k3s.sh` et `bootstrap.sh` font le travail, mais ce sont des scripts,
+pas de l'infrastructure déclarative.
+
+**Un second nœud**, pour démontrer la résilience à la perte d'une machine et
+non seulement d'un pod. Une commande `k3s agent` suffirait ; les manifests
+contiennent déjà la contrainte de répartition.
+
+**Un `PodDisruptionBudget`**, pour garantir un minimum de pods disponibles
+pendant les opérations de maintenance.
+
+**Logs centralisés** avec Loki, qui s'affiche dans la Grafana déjà en place.
+
+**Le contrat d'interface avec les équipes SysOps** : ports exposés, variables
+d'environnement attendues, chemins des sondes de santé, registry utilisée.
+C'est la condition pour que nos conteneurs tournent sur leur infrastructure et
+réciproquement.
