@@ -562,3 +562,58 @@ même signal, l'un pour corriger, l'autre pour prévenir.
 Les notifications ne sont pas routées vers un service externe : sans serveur de
 messagerie, les alertes restent visibles dans Grafana. Y brancher un webhook
 Slack ou Discord demanderait une dizaine de lignes de plus.
+
+
+---
+
+# 12. Logs centralisés
+
+Les logs de chaque composant sont consultables dans Grafana, à côté des
+métriques. Deux composants s'en chargent.
+
+**Loki** stocke les logs, comme Prometheus stocke les métriques. Sa
+particularité : il n'indexe **pas** le contenu des messages, seulement leurs
+étiquettes — namespace, pod, conteneur, application. C'est ce qui le rend
+léger : on sélectionne d'abord « les logs du backend », puis on filtre dans ce
+sous-ensemble. Elasticsearch, à l'inverse, indexe chaque mot, ce qui coûte
+beaucoup plus de mémoire.
+
+**Promtail** les collecte. Il tourne en `DaemonSet`, c'est-à-dire **un
+exemplaire sur chaque nœud** — nécessaire, puisque les fichiers de logs sont
+sur le disque du nœud et qu'aucun pod central ne pourrait les lire à distance.
+Il demande à Kubernetes la liste des pods, en déduit le chemin de leurs
+fichiers, les lit, et attache à chaque ligne les étiquettes qui permettront de
+la retrouver.
+
+## Consulter les logs
+
+**Tableau de bord dédié** : Grafana → Dashboards → *Projet DevOps - logs par
+composant*. Trois panneaux, un par composant : backend, frontend et base de
+données.
+
+**Recherche libre** : Grafana → Explore → source de données **Loki**.
+
+```
+{namespace="tasks", app="backend"}                    tous les logs du backend
+{namespace="tasks", app="backend"} |= "ERROR"         seulement les erreurs
+{namespace="tasks"}                                   les trois composants
+{namespace="tasks", app="frontend"} |= "500"          les réponses 500 de Nginx
+count_over_time({namespace="tasks", app="backend"}[5m])   volume de logs
+```
+
+La syntaxe s'appelle LogQL et ressemble volontairement à PromQL : sélection par
+étiquettes entre accolades, puis filtres.
+
+## Pourquoi Loki plutôt qu'ELK
+
+Le sujet propose les deux. Loki s'affiche dans la Grafana déjà en place : une
+seule interface à présenter, une seule à maintenir. ELK imposerait
+Elasticsearch — gourmand en mémoire — et Kibana, un second outil de
+visualisation à côté de Grafana.
+
+## Limites assumées
+
+Les logs sont conservés **24 heures**, dans un volume non persistant : ils
+disparaissent si le pod Loki est recréé. Acceptable pour un projet de
+démonstration ; un volume persistant et une rétention plus longue suffiraient à
+les conserver.

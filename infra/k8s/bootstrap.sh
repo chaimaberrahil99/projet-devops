@@ -71,10 +71,14 @@ kubectl rollout status deployment/backend  -n "$NAMESPACE" --timeout=180s
 kubectl rollout status deployment/frontend -n "$NAMESPACE" --timeout=180s
 
 # --- Supervision ------------------------------------------------------------
-etape "Deploiement de Prometheus et Grafana"
+etape "Deploiement de la supervision"
 kubectl apply -f infra/k8s/monitoring/prometheus.yaml
+kubectl apply -f infra/k8s/monitoring/loki.yaml
+kubectl apply -f infra/k8s/monitoring/promtail.yaml
 kubectl apply -f infra/k8s/monitoring/grafana.yaml
 kubectl rollout status deployment/prometheus -n monitoring --timeout=180s
+kubectl rollout status deployment/loki       -n monitoring --timeout=180s
+kubectl rollout status daemonset/promtail    -n monitoring --timeout=180s
 kubectl rollout status deployment/grafana    -n monitoring --timeout=180s
 
 # --- Verification -----------------------------------------------------------

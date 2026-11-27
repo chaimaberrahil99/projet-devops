@@ -1,0 +1,119 @@
+# Loki : le stockage des logs.
+#
+# Meme logique que Prometheus, mais pour du texte : Loki n'indexe pas le
+# contenu des messages, seulement leurs etiquettes (namespace, pod,
+# conteneur). C'est ce qui le rend leger -- on cherche d'abord "les logs du
+# backend", puis on filtre dans ce sous-ensemble.
+#
+# Choisi plutot qu'ELK, que le sujet propose aussi : Loki s'affiche dans la
+# Grafana deja en place, alors qu'ELK imposerait Elasticsearch et Kibana,
+# beaucoup plus lourds, avec une seconde interface a presenter.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-config
+  namespace: monitoring
+data:
+  loki.yaml: |
+    auth_enabled: false
+
+    server:
+      http_listen_port: 3100
+      log_level: warn
+
+    common:
+      instance_addr: 127.0.0.1
+      path_prefix: /loki
+      storage:
+        filesystem:
+          chunks_directory: /loki/chunks
+          rules_directory: /loki/rules
+      replication_factor: 1
+      ring:
+        kvstore:
+          store: inmemory
+
+    schema_config:
+      configs:
+        - from: 2024-01-01
+          store: boltdb-shipper
+          object_store: filesystem
+          schema: v11
+          index:
+            prefix: index_
+            period: 24h
+
+    limits_config:
+      # 24 h d'historique : largement assez pour une demonstration, et ca
+      # borne la place occupee sur le disque.
+      retention_period: 24h
+      reject_old_samples: false
+      ingestion_rate_mb: 8
+      ingestion_burst_size_mb: 16
+
+    compactor:
+      working_directory: /loki/compactor
+      retention_enabled: true
+      delete_request_store: filesystem
+
+    analytics:
+      reporting_enabled: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loki
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: loki
+  template:
+    metadata:
+      labels:
+        app: loki
+    spec:
+      securityContext:
+        fsGroup: 10001
+        runAsUser: 10001
+        runAsGroup: 10001
+      containers:
+        - name: loki
+          image: grafana/loki:2.9.4
+          args: ["-config.file=/etc/loki/loki.yaml"]
+          ports:
+            - containerPort: 3100
+          volumeMounts:
+            - name: config
+              mountPath: /etc/loki
+            - name: donnees
+              mountPath: /loki
+          readinessProbe:
+            httpGet: { path: /ready, port: 3100 }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: 500m, memory: 512Mi }
+      volumes:
+        - name: config
+          configMap:
+            name: loki-config
+        - name: donnees
+          # emptyDir : les logs disparaissent si le pod est recree. Acceptable
+          # ici -- ce sont des logs de demonstration, pas une archive legale.
+          # Un volume persistant suffirait a les conserver.
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki
+  namespace: monitoring
+spec:
+  selector:
+    app: loki
+  ports:
+    - port: 3100
+      targetPort: 3100
