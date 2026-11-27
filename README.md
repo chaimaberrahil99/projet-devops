@@ -500,3 +500,65 @@ kubectl run -n tasks charge --rm -it --image=busybox --restart=Never -- \
 Le trafic monte, la latence réagit, la saturation processeur grimpe — et
 l'auto-scaling se déclenche. Les quatre signaux racontent la même histoire au
 même moment : c'est exactement ce qu'on attend d'un tableau de bord SRE.
+
+
+---
+
+# 11. Deux raffinements
+
+## Un changement n'impacte que ce qui change
+
+Le pipeline reconstruisait les deux images à chaque commit, même quand seul le
+CSS du frontend avait bougé. L'empreinte de l'image du backend changeait donc
+elle aussi, la surveillance la détectait, et ses pods étaient redéployés sans
+raison.
+
+Un job `changes` détecte désormais quels dossiers ont été modifiés et produit
+un tableau — `["frontend"]`, `["backend","frontend"]`, ou vide. Ce tableau
+alimente directement la matrice du job `build` : une seule exécution si un seul
+composant a changé, aucune si le commit ne touche qu'à la documentation ou aux
+manifests.
+
+L'image non reconstruite garde son empreinte, donc la surveillance n'y touche
+pas, donc ses pods ne bougent pas. On répare à la source plutôt qu'en filtrant
+au déploiement.
+
+Les contrôles qualité, eux, tournent **toujours** : modifier un manifest ne
+dispense pas de vérifier que le code passe les tests.
+
+**Une limite à connaître :** `app/db/init.sql` ne fait partie d'aucune image —
+il est monté comme ConfigMap. Le modifier ne déclenche donc aucune
+reconstruction. Pour appliquer un nouveau schéma, relancer `bootstrap.sh`, qui
+rejoue le Job de migration.
+
+## Des alertes
+
+Un tableau de bord suppose quelqu'un devant l'écran. Une alerte, non.
+
+Quatre règles, une par signal, décrites en YAML dans
+`infra/k8s/monitoring/alertes.yaml` et appliquées au démarrage de Grafana —
+comme la source de données et le tableau de bord, rien n'est configuré à la
+main.
+
+| Alerte | Seuil | Délai | Pourquoi ce délai |
+|---|---|---|---|
+| Taux d'erreur | > 5 % | 2 min | les utilisateurs sont affectés, il faut réagir vite |
+| Latence (p95) | > 500 ms | 5 min | assez long pour ignorer un pic isolé |
+| Pods disponibles | < 2 | 2 min | le service répond, mais n'est plus protégé |
+| Saturation processeur | > 80 % de la demande | 2 min | l'auto-scaling aurait dû agir |
+
+À consulter dans **Alerting → Alert rules**.
+
+Chaque règle compare une requête Prometheus à un seuil, et ne se déclenche que
+si la condition tient pendant toute la durée indiquée. C'est ce qui distingue
+une alerte utile d'une alerte qui crie à chaque soubresaut — et une alerte à
+laquelle on ne croit plus ne sert à rien.
+
+**Pendant une démonstration**, l'alerte de saturation se déclenche d'elle-même
+sous la charge : on voit son état passer de `Normal` à `Pending` puis `Firing`
+pendant que l'auto-scaling ajoute des pods. Les deux mécanismes réagissent au
+même signal, l'un pour corriger, l'autre pour prévenir.
+
+Les notifications ne sont pas routées vers un service externe : sans serveur de
+messagerie, les alertes restent visibles dans Grafana. Y brancher un webhook
+Slack ou Discord demanderait une dizaine de lignes de plus.

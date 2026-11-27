@@ -270,6 +270,231 @@ data:
       ]
     }
 ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-alertes
+  namespace: monitoring
+data:
+  alertes.yaml: |
+    # Alertes Grafana, decrites en YAML et versionnees.
+    #
+    # Un tableau de bord suppose quelqu'un devant l'ecran. Une alerte, non : c'est
+    # ce qui transforme des metriques en supervision.
+    #
+    # Une regle par signal SRE. Chacune compare une requete Prometheus (A) a un
+    # seuil (B), et ne se declenche que si la condition tient pendant la duree
+    # indiquee par `for` -- ce qui evite les alertes sur un pic isole.
+    #
+    # Comme la source de donnees et le tableau de bord, ces regles sont appliquees
+    # au demarrage de Grafana : rien n'est configure a la main dans l'interface.
+    #
+    # A voir dans Grafana :  Alerting > Alert rules
+
+    apiVersion: 1
+    groups:
+    - orgId: 1
+      name: signaux-sre
+      folder: Alertes
+      interval: 1m
+      rules:
+      - uid: sre-erreurs
+        title: Taux d'erreur eleve
+        condition: B
+        for: 2m
+        isPaused: false
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severite: critique
+        annotations:
+          summary: Plus de 5 % des requetes echouent
+          description: 'Les utilisateurs sont affectes maintenant. Verifier les journaux
+            du backend : kubectl logs -n tasks -l app=backend --tail=50'
+        data:
+        - refId: A
+          relativeTimeRange:
+            from: 600
+            to: 0
+          datasourceUid: prometheus
+          model:
+            refId: A
+            editorMode: code
+            expr: (sum(rate(http_requests_total{app="backend",status=~"5.."}[5m])) or
+              vector(0)) / clamp_min(sum(rate(http_requests_total{app="backend"}[5m])),
+              0.001)
+            instant: true
+            range: false
+        - refId: B
+          relativeTimeRange:
+            from: 0
+            to: 0
+          datasourceUid: __expr__
+          model:
+            refId: B
+            type: threshold
+            expression: A
+            conditions:
+            - evaluator:
+                type: gt
+                params:
+                - 0.05
+              operator:
+                type: and
+              query:
+                params:
+                - A
+              reducer:
+                type: last
+                params: []
+              type: query
+      - uid: sre-latence
+        title: Latence trop elevee
+        condition: B
+        for: 5m
+        isPaused: false
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severite: avertissement
+        annotations:
+          summary: Le 95e centile depasse 500 ms
+          description: Le service repond encore mais lentement. Cinq minutes d'attente
+            avant declenchement, pour ignorer les pics isoles.
+        data:
+        - refId: A
+          relativeTimeRange:
+            from: 600
+            to: 0
+          datasourceUid: prometheus
+          model:
+            refId: A
+            editorMode: code
+            expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{app="backend",endpoint!~"/health.*|/metrics"}[5m]))
+              by (le))
+            instant: true
+            range: false
+        - refId: B
+          relativeTimeRange:
+            from: 0
+            to: 0
+          datasourceUid: __expr__
+          model:
+            refId: B
+            type: threshold
+            expression: A
+            conditions:
+            - evaluator:
+                type: gt
+                params:
+                - 0.5
+              operator:
+                type: and
+              query:
+                params:
+                - A
+              reducer:
+                type: last
+                params: []
+              type: query
+      - uid: sre-disponibilite
+        title: Moins de deux pods backend
+        condition: B
+        for: 2m
+        isPaused: false
+        noDataState: Alerting
+        execErrState: Error
+        labels:
+          severite: critique
+        annotations:
+          summary: Le backend n'a plus deux repliques pretes
+          description: 'Le service repond peut-etre encore, mais il n''est plus protege
+            contre la perte d''un pod. Verifier : kubectl get pods -n tasks'
+        data:
+        - refId: A
+          relativeTimeRange:
+            from: 600
+            to: 0
+          datasourceUid: prometheus
+          model:
+            refId: A
+            editorMode: code
+            expr: sum(up{app="backend"})
+            instant: true
+            range: false
+        - refId: B
+          relativeTimeRange:
+            from: 0
+            to: 0
+          datasourceUid: __expr__
+          model:
+            refId: B
+            type: threshold
+            expression: A
+            conditions:
+            - evaluator:
+                type: lt
+                params:
+                - 2
+              operator:
+                type: and
+              query:
+                params:
+                - A
+              reducer:
+                type: last
+                params: []
+              type: query
+      - uid: sre-saturation
+        title: Saturation processeur
+        condition: B
+        for: 2m
+        isPaused: false
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severite: avertissement
+        annotations:
+          summary: Un pod backend depasse 80 % de sa demande processeur
+          description: Seuil a 0,04 coeur, soit 80 % des 50 millicores demandes. L'auto-scaling
+            devrait avoir ajoute des repliques ; s'il ne le fait pas, c'est qu'il a atteint
+            son maximum de six.
+        data:
+        - refId: A
+          relativeTimeRange:
+            from: 600
+            to: 0
+          datasourceUid: prometheus
+          model:
+            refId: A
+            editorMode: code
+            expr: max(rate(container_cpu_usage_seconds_total{namespace="tasks",container="backend"}[5m]))
+            instant: true
+            range: false
+        - refId: B
+          relativeTimeRange:
+            from: 0
+            to: 0
+          datasourceUid: __expr__
+          model:
+            refId: B
+            type: threshold
+            expression: A
+            conditions:
+            - evaluator:
+                type: gt
+                params:
+                - 0.04
+              operator:
+                type: and
+              query:
+                params:
+                - A
+              reducer:
+                type: last
+                params: []
+              type: query
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -309,6 +534,8 @@ spec:
               mountPath: /etc/grafana/provisioning/dashboards
             - name: dashboards
               mountPath: /var/lib/grafana/dashboards
+            - name: alertes
+              mountPath: /etc/grafana/provisioning/alerting
           readinessProbe:
             httpGet: { path: /api/health, port: 3000 }
             initialDelaySeconds: 10
@@ -325,6 +552,9 @@ spec:
         - name: dashboards
           configMap:
             name: grafana-dashboard-sre
+        - name: alertes
+          configMap:
+            name: grafana-alertes
 ---
 apiVersion: v1
 kind: Service

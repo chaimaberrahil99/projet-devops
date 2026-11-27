@@ -34,7 +34,49 @@ env:
 jobs:
 
   # ---------------------------------------------------------------------------
+  # 0. QUELS COMPOSANTS ONT CHANGE ?
+  #
+  # Sans ce job, un commit qui ne touche qu'au CSS du frontend reconstruit AUSSI
+  # l'image du backend. Son empreinte change donc, la surveillance la detecte,
+  # et les pods du backend sont redeployes sans aucune raison.
+  #
+  # On repare ca a la source : on ne construit que ce qui a change. L'image non
+  # reconstruite garde son empreinte, donc Kubernetes n'y touche pas.
+  #
+  # La sortie `composants` est un tableau JSON, par exemple ["frontend"] ou
+  # ["backend","frontend"], qui alimente directement la matrice du job `build`.
+  # ---------------------------------------------------------------------------
+  changes:
+    name: Detecter les composants modifies
+    runs-on: ubuntu-latest
+    outputs:
+      composants: ${{ steps.filtre.outputs.changes }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filtre
+        with:
+          filters: |
+            backend:
+              - 'app/backend/**'
+            frontend:
+              - 'app/frontend/**'
+
+      - name: Recapitulatif
+        run: |
+          echo "Composants a reconstruire : ${{ steps.filtre.outputs.changes }}"
+          if [ '${{ steps.filtre.outputs.changes }}' = '[]' ]; then
+            echo "Aucune image a reconstruire : ce commit ne touche ni au"
+            echo "backend ni au frontend (documentation, manifests, pipeline...)."
+          fi
+
+  # ---------------------------------------------------------------------------
   # 1. CONTROLE QUALITE : lint + tests. Rien ne se construit si ca echoue.
+  #
+  # Ce job tourne TOUJOURS, quel que soit le fichier modifie : une modification
+  # de manifest ou de documentation ne doit pas dispenser de verifier que le
+  # code passe toujours les tests.
   # ---------------------------------------------------------------------------
   quality:
     name: Lint et tests
@@ -98,21 +140,20 @@ jobs:
   build:
     name: Build et push des images
     runs-on: ubuntu-latest
-    needs: quality
-    # Sur une pull request on valide, on ne publie pas.
-    if: github.event_name == 'push'
+    needs: [changes, quality]
+    # Deux conditions : on ne publie pas depuis une pull request, et on ne
+    # lance rien si aucun composant n'a change.
+    if: github.event_name == 'push' && needs.changes.outputs.composants != '[]'
 
     permissions:
       contents: read
       packages: write          # necessaire pour pousser sur GHCR
 
     strategy:
+      # Matrice DYNAMIQUE : une execution par composant modifie, et une seule
+      # si un seul a change. Le contexte de build se deduit du nom.
       matrix:
-        include:
-          - component: backend
-            context: app/backend
-          - component: frontend
-            context: app/frontend
+        component: ${{ fromJSON(needs.changes.outputs.composants) }}
 
     steps:
       - uses: actions/checkout@v4
@@ -149,7 +190,7 @@ jobs:
       - name: Build et push
         uses: docker/build-push-action@v6
         with:
-          context: ${{ matrix.context }}
+          context: app/${{ matrix.component }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
