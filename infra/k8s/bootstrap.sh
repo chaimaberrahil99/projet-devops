@@ -56,11 +56,18 @@ kubectl delete job db-migrate -n "$NAMESPACE" --ignore-not-found
 kubectl apply -f infra/k8s/job-migrate.yaml
 kubectl wait --for=condition=complete job/db-migrate -n "$NAMESPACE" --timeout=180s
 
-# --- 5. Verification --------------------------------------------------------
 etape "Attente des pods applicatifs"
 kubectl rollout status deployment/backend  -n "$NAMESPACE" --timeout=180s
 kubectl rollout status deployment/frontend -n "$NAMESPACE" --timeout=180s
 
+# --- 5. Supervision ---------------------------------------------------------
+etape "Deploiement de Prometheus et Grafana"
+kubectl apply -f infra/k8s/monitoring/prometheus.yaml
+kubectl apply -f infra/k8s/monitoring/grafana.yaml
+kubectl rollout status deployment/prometheus -n monitoring --timeout=180s
+kubectl rollout status deployment/grafana    -n monitoring --timeout=180s
+
+# --- 6. Verification --------------------------------------------------------
 etape "Repartition des pods sur les noeuds"
 kubectl get pods -n "$NAMESPACE" -o wide
 
@@ -71,7 +78,8 @@ kubectl get hpa -n "$NAMESPACE"
 
 echo
 echo "=============================================================="
-echo " Application disponible sur  http://localhost"
+echo " Application :  http://localhost"
+echo " Grafana     :  http://localhost:3000   (consultation libre)"
 echo
 echo " Deploiement continu :  ./infra/k8s/watch-deploy-k8s.sh"
 echo "=============================================================="

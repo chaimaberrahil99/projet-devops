@@ -398,3 +398,66 @@ Vérifiez le nom exact du nœud avec `kubectl get nodes` avant de lancer le
 C'est la contrainte `topologySpreadConstraints` des Deployments qui répartit les
 répliques sur des nœuds différents — sans elle, les deux pourraient se retrouver
 sur la même machine, et sa perte couperait le service malgré les deux répliques.
+
+
+---
+
+# 10. Observabilité — Prometheus et Grafana
+
+Déployés automatiquement par `bootstrap.sh`, dans le namespace `monitoring`.
+
+**Grafana : <http://localhost:3000>** — consultation libre, sans connexion. Le
+tableau de bord « Projet DevOps - les 4 signaux SRE » est déjà là.
+
+## Les quatre signaux
+
+| Signal | Ce qu'il mesure | D'où vient la donnée |
+|---|---|---|
+| Trafic | requêtes par seconde, par route | compteur exposé par le backend |
+| Erreurs | proportion de réponses 5xx | même compteur, filtré sur le code |
+| Latence | 95e centile du temps de réponse | histogramme exposé par le backend |
+| Saturation | processeur consommé par pod | cAdvisor, intégré au kubelet |
+
+Les trois premiers viennent du code : le backend expose `/metrics`, avec un
+compteur `http_requests_total` et un histogramme
+`http_request_duration_seconds`. Le quatrième vient de Kubernetes, car une
+application ne peut pas mesurer sa propre saturation.
+
+## Deux décisions à savoir défendre
+
+**On expose des séries, pas des moyennes déjà calculées.** Le backend se
+contente d'incrémenter des compteurs ; c'est Prometheus qui calcule les taux au
+moment de la requête. On peut donc demander « le taux d'erreur des cinq
+dernières minutes » sans que l'application ait eu à le prévoir.
+
+**On mesure la latence par centile, pas par moyenne.** Une moyenne masque les
+requêtes lentes : si 99 requêtes prennent 10 ms et une seule 3 secondes, la
+moyenne reste à 40 ms alors qu'un utilisateur sur cent attend trois secondes.
+Le 95e centile dit « 95 % des utilisateurs sont servis plus vite que ça ».
+
+## La découverte automatique des cibles
+
+Prometheus ne contient aucune liste de pods. Il interroge Kubernetes et retient
+ceux qui portent l'annotation `prometheus.io/scrape: "true"` — elle est posée
+sur le Deployment du backend. Ajouter une réplique, ou un nouveau service, ne
+demande donc aucune modification de la configuration de Prometheus.
+
+## Vérifier que la collecte fonctionne
+
+```bash
+kubectl get pods -n monitoring
+kubectl port-forward -n monitoring svc/prometheus 9090:9090
+```
+Puis <http://localhost:9090/targets> : les cibles `application` et `cadvisor`
+doivent être en `UP`.
+
+## Faire bouger les courbes pendant la démonstration
+
+```bash
+kubectl run -n tasks charge --rm -it --image=busybox --restart=Never -- \
+  sh -c 'while true; do wget -q -O- http://backend:8000/api/stats; done'
+```
+
+Le trafic monte, la latence réagit, la saturation processeur grimpe — et
+l'auto-scaling se déclenche. Les quatre signaux racontent la même histoire au
+même moment : c'est exactement ce qu'on attend d'un tableau de bord SRE.

@@ -11,11 +11,13 @@ Principes respectes ici (ils comptent pour la notation) :
 """
 
 import os
+import time
 
 import psycopg2
 import psycopg2.extras
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, Response
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from pydantic import BaseModel, Field
 
 # --- Configuration : 100 % environnement, zero valeur en dur ------------------
@@ -31,6 +33,55 @@ DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
 APP_VERSION = os.environ.get("APP_VERSION", "dev")
 
 app = FastAPI(title="Tasks API", version=APP_VERSION)
+
+
+# --- Metriques Prometheus -----------------------------------------------------
+#
+# Trois des quatre "signaux dorés" du SRE sont mesures ici :
+#   - trafic   : nombre de requetes par seconde      -> compteur http_requests_total
+#   - erreurs  : proportion de reponses 5xx          -> meme compteur, filtre sur le code
+#   - latence  : temps de reponse                    -> histogramme http_request_duration
+# Le quatrieme, la saturation, vient de cAdvisor (processeur et memoire des
+# conteneurs), que Prometheus collecte directement aupres de Kubernetes.
+#
+# On expose des SERIES, pas des valeurs deja calculees : Prometheus interroge
+# /metrics regulierement et calcule les taux lui-meme. C'est ce qui permet de
+# demander ensuite "le taux d'erreur des 5 dernieres minutes" sans que
+# l'application ait eu a le prevoir.
+
+REQUETES = Counter(
+    "http_requests_total",
+    "Nombre total de requetes HTTP",
+    ["method", "endpoint", "status"],
+)
+DUREE = Histogram(
+    "http_request_duration_seconds",
+    "Duree des requetes HTTP en secondes",
+    ["method", "endpoint"],
+)
+
+
+@app.middleware("http")
+async def mesurer(request: Request, call_next):
+    # On utilise le MOTIF de route (/api/tasks/{task_id}) et non l'URL reelle :
+    # sinon chaque identifiant creerait une serie distincte, et Prometheus
+    # croulerait sous les millions de series. C'est l'erreur classique.
+    debut = time.perf_counter()
+    reponse = await call_next(request)
+    # La route n'est connue qu'une fois le routage effectue, donc apres l'appel.
+    route = request.scope.get("route")
+    endpoint = getattr(route, "path", request.url.path)
+
+    if endpoint != "/metrics":
+        DUREE.labels(request.method, endpoint).observe(time.perf_counter() - debut)
+        REQUETES.labels(request.method, endpoint, reponse.status_code).inc()
+    return reponse
+
+
+@app.get("/metrics")
+def metrics():
+    """Point de collecte interroge par Prometheus."""
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 def get_connection():

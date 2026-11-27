@@ -37,6 +37,13 @@ spec:
     metadata:
       labels:
         app: backend
+      annotations:
+        # Ces trois annotations suffisent a Prometheus pour decouvrir le pod
+        # et savoir ou l'interroger. Aucune configuration cote Prometheus :
+        # ajouter une replique ou un nouveau service se fait ici.
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: /metrics
     spec:
       # Repartit les 2 repliques sur des NOEUDS DIFFERENTS.
       # Sans cette contrainte, Kubernetes peut placer les deux sur la meme
