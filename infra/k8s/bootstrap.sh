@@ -32,7 +32,20 @@ kubectl get nodes
 # --- metrics-server ---------------------------------------------------------
 # k3s l'embarque d'origine : rien a installer. Sans lui, l'auto-scaling
 # resterait bloque sur <unknown>.
+#
+# Attention au timing : k3s cree ce deploiement quelques dizaines de secondes
+# APRES que le noeud passe en Ready. Lancer `rollout status` trop tot echoue
+# avec "not found" -- on attend donc d'abord qu'il existe.
 etape "Attente de metrics-server (fourni par k3s)"
+for _ in $(seq 1 60); do
+    kubectl get deployment metrics-server -n kube-system >/dev/null 2>&1 && break
+    sleep 2
+done
+if ! kubectl get deployment metrics-server -n kube-system >/dev/null 2>&1; then
+    echo "metrics-server n'est toujours pas la apres 2 minutes." >&2
+    echo "Verifier :  kubectl get pods -n kube-system" >&2
+    exit 1
+fi
 kubectl rollout status deployment/metrics-server -n kube-system --timeout=180s
 
 # --- L'application ----------------------------------------------------------
